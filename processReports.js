@@ -9,6 +9,7 @@ admin.initializeApp({
 
 const db = admin.database();
 const liveRef = db.ref("reports");
+const mergedRef = db.ref("merged_reports");
 const trashRef = db.ref("reports_trash");
 const usersRef = db.ref("users");
 
@@ -27,26 +28,40 @@ function haversine(lat1, lon1, lat2, lon2) {
 
 (async () => {
   const now = Math.floor(Date.now() / 1000);
+  let deleteCount = 0;
+  let mergeCount = 0;
+
   try {
-    const [liveSnap, trashSnap, usersSnap] = await Promise.all([
+    const [liveSnap, trashSnap, usersSnap, mergedSnap] = await Promise.all([
       liveRef.once("value"),
       trashRef.once("value"),
       usersRef.once("value"),
+      mergedRef.once("value"),
     ]);
 
     const liveData = liveSnap.val() || {};
     const trashData = trashSnap.val() || {};
     const usersData = usersSnap.val() || {};
+    const mergedData = mergedSnap.val() || {};
     const updates = {};
 
     Object.entries(liveData).forEach(([id, rpt]) => {
-      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) updates[`/reports/${id}`] = null;
+      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) {
+        updates[`/reports/${id}`] = null;
+        deleteCount++;
+      }
     });
     Object.entries(trashData).forEach(([id, rpt]) => {
-      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) updates[`/reports_trash/${id}`] = null;
+      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) {
+        updates[`/reports_trash/${id}`] = null;
+        deleteCount++;
+      }
     });
     Object.entries(usersData).forEach(([uid, usr]) => {
-      if (usr.lastReportTimestamp && now - usr.lastReportTimestamp > MAX_AGE) updates[`/users/${uid}/lastReportTimestamp`] = null;
+      if (usr.lastReportTimestamp && now - usr.lastReportTimestamp > MAX_AGE) {
+        updates[`/users/${uid}/lastReportTimestamp`] = null;
+        deleteCount++;
+      }
     });
 
     const processed = new Set();
@@ -54,12 +69,16 @@ function haversine(lat1, lon1, lat2, lon2) {
 
     for (let i = 0; i < entries.length; i++) {
       const [idA, rA] = entries[i];
-      if (processed.has(idA) || !rA.type || !rA.latitude || !rA.longitude || rA.merged) continue;
+      if (processed.has(idA) || !rA.type || !rA.latitude || !rA.longitude) continue;
+      if (Object.values(mergedData).some(m => m.timestamp === rA.timestamp && m.latitude === rA.latitude && m.longitude === rA.longitude && m.type === rA.type)) continue;
+
       const cluster = [[idA, rA]];
       processed.add(idA);
+
       for (let j = i + 1; j < entries.length; j++) {
         const [idB, rB] = entries[j];
-        if (processed.has(idB) || rB.type !== rA.type || rB.merged) continue;
+        if (processed.has(idB) || rB.type !== rA.type) continue;
+        if (Object.values(mergedData).some(m => m.timestamp === rB.timestamp && m.latitude === rB.latitude && m.longitude === rB.longitude && m.type === rB.type)) continue;
         const dist = haversine(rA.latitude, rA.longitude, rB.latitude, rB.longitude);
         if (dist <= MERGE_RADIUS) {
           cluster.push([idB, rB]);
@@ -68,6 +87,7 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
       if (cluster.length < 2) continue;
 
+      mergeCount++;
       const mergedDesc = cluster.map(([, rpt]) => rpt.description || "").filter(d => d).join(",");
       const timestamps = cluster.map(([, rpt]) => rpt.timestamp || 0);
       const maxTs = Math.max(...timestamps);
@@ -75,14 +95,16 @@ function haversine(lat1, lon1, lat2, lon2) {
       const avgLon = cluster.reduce((sum, [, rpt]) => sum + rpt.longitude, 0) / cluster.length;
       const newKey = liveRef.push().key;
 
-      updates[`/reports/${newKey}`] = {
+      const mergedObj = {
         type: rA.type,
         description: mergedDesc,
         latitude: avgLat,
         longitude: avgLon,
         timestamp: maxTs,
-        merged: true,
       };
+
+      updates[`/reports/${newKey}`] = mergedObj;
+      updates[`/merged_reports/${newKey}`] = mergedObj;
 
       cluster.forEach(([rid, rpt]) => {
         updates[`/reports_trash/${rid}`] = rpt;
@@ -91,6 +113,8 @@ function haversine(lat1, lon1, lat2, lon2) {
     }
 
     await db.ref().update(updates);
+    console.log(`✅ Deleted ${deleteCount} items, merged ${mergeCount} clusters.`);
+    console.log("🎉 Cleanup and merge succeeded.");
   } catch {}
   process.exit(0);
 })();
