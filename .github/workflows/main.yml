@@ -27,7 +27,7 @@ jobs:
         run: node processReports.js
 
       - name: ⏱ Processing delay
-        run: sleep 4
+        run: sleep 10
 
       - name: 📨 Process reports (second run)
         env:
