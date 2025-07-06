@@ -13,10 +13,11 @@ const trashRef = db.ref("reports_trash");
 
 const MAX_AGE = 48 * 60 * 60; // 48 hours in seconds
 
-const now = Math.floor(Date.now() / 1000);
+const now = Math.floor(Date.now() / 1000); // Get current timestamp in seconds
 
 (async () => {
   try {
+    // Fetch reports from live and trash collections
     const [liveSnap, trashSnap] = await Promise.all([
       liveRef.once("value"),
       trashRef.once("value"),
@@ -43,7 +44,7 @@ const now = Math.floor(Date.now() / 1000);
       }
     }
 
-    // Write the deletion to Firebase
+    // Write the deletion updates back to Firebase
     await db.ref().update({
       ...liveDeletes,
       ...trashDeletes,
