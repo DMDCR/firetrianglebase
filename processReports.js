@@ -9,142 +9,67 @@ admin.initializeApp({
 
 const db = admin.database();
 const liveRef = db.ref("reports");
-const mergedRef = db.ref("merged_reports");
 const trashRef = db.ref("reports_trash");
 const usersRef = db.ref("users");
 
-const MAX_AGE = 48 * 60 * 60;
-const MERGE_RADIUS = 0.1;
+const MAX_AGE = 48 * 60 * 60; // 48 hours in seconds
 
-function haversine(lat1, lon1, lat2, lon2) {
-  const toRad = x => x * Math.PI / 180;
-  const R = 6371;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) ** 2 +
-            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-            Math.sin(dLon / 2) ** 2;
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
+const now = Math.floor(Date.now() / 1000); // Get current timestamp in seconds
 
 (async () => {
-  const now = Math.floor(Date.now() / 1000);
-  let deleteCount = 0;
-  let mergeCount = 0;
-  let duplicateSkips = 0;
-
   try {
-    console.log("🔄 Fetching database snapshots...");
-    const [liveSnap, trashSnap, usersSnap, mergedSnap] = await Promise.all([
+    // Fetch reports from live and trash collections
+    const [liveSnap, trashSnap, usersSnap] = await Promise.all([
       liveRef.once("value"),
       trashRef.once("value"),
-      usersRef.once("value"),
-      mergedRef.once("value"),
+      usersRef.once("value"), // Fetch users' data
     ]);
 
-    const liveData = liveSnap.val() || {};
-    const trashData = trashSnap.val() || {};
-    const usersData = usersSnap.val() || {};
-    const mergedData = mergedSnap.val() || {};
-    const updates = {};
+    const liveData = liveSnap.exists() ? liveSnap.val() : {};
+    const trashData = trashSnap.exists() ? trashSnap.val() : {};
+    const usersData = usersSnap.exists() ? usersSnap.val() : {};
 
-    console.log("🧹 Starting cleanup...");
-
-    const mergedTimestamps = new Set(
-      Object.values(mergedData)
-        .filter(m => m?.timestamp)
-        .map(m => m.timestamp)
-    );
-
-    // Cleanup old reports and trash
-    for (const [id, rpt] of Object.entries(liveData)) {
-      if (!rpt?.timestamp) continue;
-      if (now - rpt.timestamp > MAX_AGE && !mergedTimestamps.has(rpt.timestamp)) {
-        updates[`/reports/${id}`] = null;
-        deleteCount++;
-        console.log(`🗑️ Deleted old report ${id}`);
+    // Delete reports older than 48 hours from live collection
+    const liveDeletes = {};
+    for (const id in liveData) {
+      const report = liveData[id];
+      if (report.timestamp && now - report.timestamp > MAX_AGE) {
+        liveDeletes[`/reports/${id}`] = null; // Mark for deletion
       }
     }
 
-    for (const [id, rpt] of Object.entries(trashData)) {
-      if (!rpt?.timestamp) continue;
-      if (now - rpt.timestamp > MAX_AGE) {
-        updates[`/reports_trash/${id}`] = null;
-        deleteCount++;
-        console.log(`🗑️ Deleted old trash ${id}`);
+    // Delete reports older than 48 hours from trash collection
+    const trashDeletes = {};
+    for (const id in trashData) {
+      const report = trashData[id];
+      if (report.timestamp && now - report.timestamp > MAX_AGE) {
+        trashDeletes[`/reports_trash/${id}`] = null; // Mark for deletion
       }
     }
 
-    for (const [uid, user] of Object.entries(usersData)) {
-      if (!user?.lastReportTimestamp) continue;
-      if (now - user.lastReportTimestamp > MAX_AGE) {
-        updates[`/users/${uid}/lastReportTimestamp`] = null;
-        deleteCount++;
-        console.log(`🗑️ Cleared stale user timestamp for ${uid}`);
+    // Clear the `lastReportTimestamp` field for users whose last report is older than 48 hours
+    const userUpdates = {};
+    for (const userId in usersData) {
+      const user = usersData[userId];
+      const lastReportTimestamp = user.lastReportTimestamp;
+
+      // Check if last report timestamp is older than 48 hours
+      if (lastReportTimestamp && now - lastReportTimestamp > MAX_AGE) {
+        userUpdates[`/users/${userId}/lastReportTimestamp`] = null; // Clear the lastReportTimestamp field
       }
     }
 
-    for (const [id, rpt] of Object.entries(mergedData)) {
-      if (!rpt?.timestamp) continue;
-      if (now - rpt.timestamp > MAX_AGE) {
-        updates[`/merged_reports/${id}`] = null;
-        deleteCount++;
-        console.log(`🗑️ Deleted old merged report ${id}`);
-      }
-    }
+    // Write the deletion updates and user updates back to Firebase
+    await db.ref().update({
+      ...liveDeletes,
+      ...trashDeletes,
+      ...userUpdates, // Apply the user updates
+    });
 
-    // Build a coordinate map of live reports
-    const latLonInUse = new Set(
-      Object.entries(liveData)
-        .filter(([id]) => !updates[`/reports/${id}`]) // Only live reports not being deleted
-        .map(([, rpt]) => `${rpt.latitude},${rpt.longitude}`)
-    );
-
-    // Process the merged reports for possible movement to live reports
-    for (const [id, rpt] of Object.entries(mergedData)) {
-      if (!rpt?.latitude || !rpt?.longitude || !rpt?.timestamp) continue;
-
-      const coordKey = `${rpt.latitude},${rpt.longitude}`;
-
-      // Check if this coordinate already exists in /reports
-      if (!latLonInUse.has(coordKey)) {
-        const newKey = liveRef.push().key;
-        const mergedObj = {
-          description: rpt.description,
-          icon: rpt.icon,
-          latitude: rpt.latitude,
-          longitude: rpt.longitude,
-          timestamp: rpt.timestamp,
-          type: rpt.type,
-          usersubmitting: "0",
-        };
-
-        // Move merged report to /reports
-        updates[`/reports/${newKey}`] = mergedObj;
-        latLonInUse.add(coordKey);
-        mergeCount++;
-
-        // Remove merged report from merged_reports
-        updates[`/merged_reports/${id}`] = null;
-        console.log(`✅ Moved merged report to /reports (${coordKey})`);
-      } else {
-        duplicateSkips++;
-        console.log(`⚠️ Skipped duplicate merged report at ${coordKey}`);
-      }
-    }
-
-    console.log("🚀 Applying updates to Firebase...");
-    await db.ref().update(updates);
-
-    console.log(`\n✅ Done!`);
-    console.log(`• Deleted: ${deleteCount}`);
-    console.log(`• Merged clusters moved to /reports: ${mergeCount}`);
-    console.log(`• Skipped (duplicate lat/lon): ${duplicateSkips}`);
-    console.log(`🎉 Cleanup and merge finished with no exposed data.`);
+    console.log("✅ Successfully deleted reports older than 48 hours and cleared lastReportTimestamp.");
+    process.exit(0);
   } catch (err) {
-    console.error("❌ Script error:", err.message);
+    console.error("❌ Failed to clean reports and update users:", err);
+    process.exit(1);
   }
-
-  process.exit(0);
 })();
