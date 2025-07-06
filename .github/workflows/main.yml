@@ -25,12 +25,3 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
         run: node processReports.js
-
-      - name: ⏱ Processing delay
-        run: sleep 10
-
-      - name: 📨 Process reports (second run)
-        env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
-        run: node processReports.js
