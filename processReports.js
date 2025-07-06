@@ -1,6 +1,5 @@
 const admin = require("firebase-admin");
 
-// Load credentials from env
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 admin.initializeApp({
@@ -14,22 +13,17 @@ const mergedRef = db.ref("merged_reports");
 const trashRef = db.ref("reports_trash");
 const usersRef = db.ref("users");
 
-// How old (in seconds) until stuff gets removed
 const MAX_AGE = 48 * 60 * 60;
-
-// Distance in km to treat two reports as “same place”
 const MERGE_RADIUS = 0.1;
 
-// Get distance between 2 points
 function haversine(lat1, lon1, lat2, lon2) {
   const toRad = x => x * Math.PI / 180;
   const R = 6371;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-    Math.sin(dLon / 2) ** 2;
+  const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+            Math.sin(dLon / 2) ** 2;
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
@@ -38,8 +32,10 @@ function haversine(lat1, lon1, lat2, lon2) {
   const now = Math.floor(Date.now() / 1000);
   let deleteCount = 0;
   let mergeCount = 0;
+  let duplicateSkips = 0;
 
   try {
+    console.log("🔄 Fetching database snapshots...");
     const [liveSnap, trashSnap, usersSnap, mergedSnap] = await Promise.all([
       liveRef.once("value"),
       trashRef.once("value"),
@@ -53,50 +49,51 @@ function haversine(lat1, lon1, lat2, lon2) {
     const mergedData = mergedSnap.val() || {};
     const updates = {};
 
+    console.log("🧹 Starting cleanup...");
+
     const mergedTimestamps = new Set(
       Object.values(mergedData)
-        .filter(m => m && typeof m.timestamp === 'number')
+        .filter(m => m?.timestamp)
         .map(m => m.timestamp)
     );
 
-    // 🗑️ Clean up old /reports
     for (const [id, rpt] of Object.entries(liveData)) {
-      if (!rpt?.timestamp || typeof rpt.timestamp !== "number") continue;
+      if (!rpt?.timestamp) continue;
       if (now - rpt.timestamp > MAX_AGE && !mergedTimestamps.has(rpt.timestamp)) {
         updates[`/reports/${id}`] = null;
         deleteCount++;
+        console.log(`🗑️ Deleted old report ${id}`);
       }
     }
 
-    // 🗑️ Clean up old /reports_trash
     for (const [id, rpt] of Object.entries(trashData)) {
-      if (!rpt?.timestamp || typeof rpt.timestamp !== "number") continue;
+      if (!rpt?.timestamp) continue;
       if (now - rpt.timestamp > MAX_AGE) {
         updates[`/reports_trash/${id}`] = null;
         deleteCount++;
+        console.log(`🗑️ Deleted old trash ${id}`);
       }
     }
 
-    // 🗑️ Clear expired lastReportTimestamps in /users
     for (const [uid, user] of Object.entries(usersData)) {
-      if (!user?.lastReportTimestamp || typeof user.lastReportTimestamp !== "number") continue;
+      if (!user?.lastReportTimestamp) continue;
       if (now - user.lastReportTimestamp > MAX_AGE) {
         updates[`/users/${uid}/lastReportTimestamp`] = null;
         deleteCount++;
+        console.log(`🗑️ Cleared stale user timestamp for ${uid}`);
       }
     }
 
-    // 🗑️ Remove expired /merged_reports
     for (const [id, rpt] of Object.entries(mergedData)) {
-      if (!rpt?.timestamp || typeof rpt.timestamp !== "number") continue;
+      if (!rpt?.timestamp) continue;
       if (now - rpt.timestamp > MAX_AGE) {
         updates[`/merged_reports/${id}`] = null;
         deleteCount++;
+        console.log(`🗑️ Deleted old merged report ${id}`);
       }
     }
 
-    // 🧹 Deduplicate merged_reports based on same lat/lng
-    const seenCoords = new Map(); // "lat,lng" -> {id, descLength}
+    const seenCoords = new Map();
     for (const [id, rpt] of Object.entries(mergedData)) {
       if (!rpt?.latitude || !rpt?.longitude) continue;
       const key = `${rpt.latitude},${rpt.longitude}`;
@@ -107,8 +104,10 @@ function haversine(lat1, lon1, lat2, lon2) {
         if (descLength > existing.descLength) {
           updates[`/merged_reports/${existing.id}`] = null;
           seenCoords.set(key, { id, descLength });
+          console.log(`🗑️ Removed shorter duplicate from merged_reports`);
         } else {
           updates[`/merged_reports/${id}`] = null;
+          console.log(`🗑️ Removed shorter duplicate from merged_reports`);
         }
         deleteCount++;
       } else {
@@ -116,38 +115,46 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     }
 
-    // 🧹 Clean up duplicates between live and merged
     for (const [id, rpt] of Object.entries(liveData)) {
       if (!rpt?.latitude || !rpt?.longitude) continue;
-      for (const [mergedId, mergedRpt] of Object.entries(mergedData)) {
-        if (
-          mergedRpt &&
-          mergedRpt.latitude === rpt.latitude &&
-          mergedRpt.longitude === rpt.longitude
-        ) {
-          const lenLive = rpt.description?.length || 0;
-          const lenMerged = mergedRpt.description?.length || 0;
 
-          if (lenLive < lenMerged) {
+      for (const [mid, mrpt] of Object.entries(mergedData)) {
+        if (
+          mrpt &&
+          mrpt.latitude === rpt.latitude &&
+          mrpt.longitude === rpt.longitude
+        ) {
+          const len1 = rpt.description?.length || 0;
+          const len2 = mrpt.description?.length || 0;
+
+          if (len1 < len2) {
             updates[`/reports/${id}`] = null;
             deleteCount++;
-          } else if (lenLive > lenMerged) {
-            updates[`/merged_reports/${mergedId}`] = null;
+            console.log(`🧼 Deleted shorter duplicate in reports`);
+          } else {
+            updates[`/merged_reports/${mid}`] = null;
             deleteCount++;
+            console.log(`🧼 Deleted shorter duplicate in merged_reports`);
           }
         }
       }
     }
 
-    // 🔁 Put any valid merged reports back into /reports
     for (const [id, rpt] of Object.entries(mergedData)) {
-      if (!rpt?.timestamp || typeof rpt.timestamp !== "number") continue;
+      if (!rpt?.timestamp) continue;
       if (!liveData[id] && now - rpt.timestamp <= MAX_AGE) {
         updates[`/reports/${id}`] = rpt;
+        console.log(`♻️ Restored valid merged report to /reports`);
       }
     }
 
-    // 🔄 Merge nearby reports in /reports
+    console.log("🔍 Building coordinate map for deduplication...");
+    const latLonInUse = new Set(
+      Object.entries(liveData)
+        .filter(([id]) => !updates[`/reports/${id}`])
+        .map(([, rpt]) => `${rpt.latitude},${rpt.longitude}`)
+    );
+
     const processed = new Set();
     const entries = Object.entries(liveData);
 
@@ -156,9 +163,9 @@ function haversine(lat1, lon1, lat2, lon2) {
       if (
         processed.has(idA) ||
         !rA?.type ||
-        typeof rA.latitude !== "number" ||
-        typeof rA.longitude !== "number" ||
-        typeof rA.timestamp !== "number" ||
+        !rA.latitude ||
+        !rA.longitude ||
+        !rA.timestamp ||
         !rA.icon ||
         !rA.usersubmitting
       ) continue;
@@ -186,45 +193,48 @@ function haversine(lat1, lon1, lat2, lon2) {
       const latestRpt = cluster.find(([, r]) => r.timestamp === maxTs)?.[1] || cluster[0][1];
 
       const newKey = liveRef.push().key;
+      const lat = latestRpt.latitude;
+      const lon = latestRpt.longitude;
+      const coordKey = `${lat},${lon}`;
+
       const mergedObj = {
         description: mergedDesc,
         icon: latestRpt.icon,
-        latitude: latestRpt.latitude,
-        longitude: latestRpt.longitude,
+        latitude: lat,
+        longitude: lon,
         timestamp: maxTs,
         type: latestRpt.type,
-        usersubmitting: "0", // this is a system-merged one
+        usersubmitting: "0",
       };
 
-      const clusterIds = new Set(cluster.map(([rid]) => rid));
-
-      // ✅ only block duplicates that aren't part of this merge
-      const isDuplicate = Object.entries(liveData).some(([existingId, existing]) =>
-        existing &&
-        !clusterIds.has(existingId) &&
-        existing.latitude === mergedObj.latitude &&
-        existing.longitude === mergedObj.longitude
-      );
-
-      if (!isDuplicate) {
+      if (!latLonInUse.has(coordKey)) {
         updates[`/reports/${newKey}`] = mergedObj;
+        latLonInUse.add(coordKey);
+        console.log(`✅ Merged cluster added to /reports`);
       } else {
-        console.log(`⚠️ Skipped merged report at (${mergedObj.latitude}, ${mergedObj.longitude}) due to existing report.`);
+        duplicateSkips++;
+        console.log(`⚠️ Skipped duplicate merged report at ${coordKey}`);
       }
 
       updates[`/merged_reports/${newKey}`] = mergedObj;
 
-      for (const [oldId, oldRpt] of cluster) {
-        updates[`/reports_trash/${oldId}`] = oldRpt;
-        updates[`/reports/${oldId}`] = null;
+      for (const [rid, rpt] of cluster) {
+        updates[`/reports_trash/${rid}`] = rpt;
+        updates[`/reports/${rid}`] = null;
+        console.log(`🗃️ Archived ${rid} to trash and removed from reports`);
       }
     }
 
+    console.log("🚀 Applying updates to Firebase...");
     await db.ref().update(updates);
-    console.log(`✅ Deleted ${deleteCount} items, merged ${mergeCount} clusters.`);
-    console.log("🎉 Cleanup and merge succeeded.");
+
+    console.log(`\n✅ Done!`);
+    console.log(`• Deleted: ${deleteCount}`);
+    console.log(`• Merged clusters: ${mergeCount}`);
+    console.log(`• Skipped (lat/lon duplicates): ${duplicateSkips}`);
+    console.log(`🎉 Cleanup and merge finished with no exposed data.`);
   } catch (err) {
-    console.error("❌ Error in cleanup and merge:", err);
+    console.error("❌ Script error:", err.message);
   }
 
   process.exit(0);
