@@ -26,8 +26,8 @@ jobs:
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
         run: node processReports.js
 
-      - name: ⏱ Wait 1 second
-        run: sleep 1
+      - name: ⏱ Processing delay
+        run: sleep 4
 
       - name: 📨 Process reports (second run)
         env:
