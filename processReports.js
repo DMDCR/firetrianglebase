@@ -45,8 +45,10 @@ function haversine(lat1, lon1, lat2, lon2) {
     const mergedData = mergedSnap.val() || {};
     const updates = {};
 
+    const mergedTimestamps = new Set(Object.values(mergedData).map(m => m.timestamp));
+
     Object.entries(liveData).forEach(([id, rpt]) => {
-      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) {
+      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE && !mergedTimestamps.has(rpt.timestamp)) {
         updates[`/reports/${id}`] = null;
         deleteCount++;
       }
