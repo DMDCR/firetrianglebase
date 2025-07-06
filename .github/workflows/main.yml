@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: ⬇️ Checkout code
+      - name: ⬇️ Checkout repo
         uses: actions/checkout@v3
 
       - name: 🧰 Setup Node.js
@@ -21,7 +21,7 @@ jobs:
       - name: 🔃 Install dependencies
         run: npm install firebase-admin
 
-      - name: 🧼 Run cleanup logic
+      - name: 📨 Process reports
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
