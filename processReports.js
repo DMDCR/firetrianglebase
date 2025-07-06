@@ -12,64 +12,85 @@ const liveRef = db.ref("reports");
 const trashRef = db.ref("reports_trash");
 const usersRef = db.ref("users");
 
-const MAX_AGE = 48 * 60 * 60; // 48 hours in seconds
+const MAX_AGE = 48 * 60 * 60;
+const MERGE_RADIUS = 0.1;
 
-const now = Math.floor(Date.now() / 1000); // Get current timestamp in seconds
+function haversine(lat1, lon1, lat2, lon2) {
+  const toRad = x => x * Math.PI / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
 
 (async () => {
+  const now = Math.floor(Date.now() / 1000);
   try {
-    // Fetch reports from live and trash collections
     const [liveSnap, trashSnap, usersSnap] = await Promise.all([
       liveRef.once("value"),
       trashRef.once("value"),
-      usersRef.once("value"), // Fetch users' data
+      usersRef.once("value"),
     ]);
 
-    const liveData = liveSnap.exists() ? liveSnap.val() : {};
-    const trashData = trashSnap.exists() ? trashSnap.val() : {};
-    const usersData = usersSnap.exists() ? usersSnap.val() : {};
+    const liveData = liveSnap.val() || {};
+    const trashData = trashSnap.val() || {};
+    const usersData = usersSnap.val() || {};
+    const updates = {};
 
-    // Delete reports older than 48 hours from live collection
-    const liveDeletes = {};
-    for (const id in liveData) {
-      const report = liveData[id];
-      if (report.timestamp && now - report.timestamp > MAX_AGE) {
-        liveDeletes[`/reports/${id}`] = null; // Mark for deletion
-      }
-    }
-
-    // Delete reports older than 48 hours from trash collection
-    const trashDeletes = {};
-    for (const id in trashData) {
-      const report = trashData[id];
-      if (report.timestamp && now - report.timestamp > MAX_AGE) {
-        trashDeletes[`/reports_trash/${id}`] = null; // Mark for deletion
-      }
-    }
-
-    // Clear the `lastReportTimestamp` field for users whose last report is older than 48 hours
-    const userUpdates = {};
-    for (const userId in usersData) {
-      const user = usersData[userId];
-      const lastReportTimestamp = user.lastReportTimestamp;
-
-      // Check if last report timestamp is older than 48 hours
-      if (lastReportTimestamp && now - lastReportTimestamp > MAX_AGE) {
-        userUpdates[`/users/${userId}/lastReportTimestamp`] = null; // Clear the lastReportTimestamp field
-      }
-    }
-
-    // Write the deletion updates and user updates back to Firebase
-    await db.ref().update({
-      ...liveDeletes,
-      ...trashDeletes,
-      ...userUpdates, // Apply the user updates
+    Object.entries(liveData).forEach(([id, rpt]) => {
+      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) updates[`/reports/${id}`] = null;
+    });
+    Object.entries(trashData).forEach(([id, rpt]) => {
+      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) updates[`/reports_trash/${id}`] = null;
+    });
+    Object.entries(usersData).forEach(([uid, usr]) => {
+      if (usr.lastReportTimestamp && now - usr.lastReportTimestamp > MAX_AGE) updates[`/users/${uid}/lastReportTimestamp`] = null;
     });
 
-    console.log("✅ Successfully deleted reports older than 48 hours and cleared lastReportTimestamp.");
-    process.exit(0);
-  } catch (err) {
-    console.error("❌ Failed to clean reports and update users:", err);
-    process.exit(1);
-  }
+    const processed = new Set();
+    const entries = Object.entries(liveData);
+
+    for (let i = 0; i < entries.length; i++) {
+      const [idA, rA] = entries[i];
+      if (processed.has(idA) || !rA.reportType || !rA.latitude || !rA.longitude || rA.merged) continue;
+      const cluster = [[idA, rA]];
+      processed.add(idA);
+      for (let j = i + 1; j < entries.length; j++) {
+        const [idB, rB] = entries[j];
+        if (processed.has(idB) || rB.reportType !== rA.reportType || rB.merged) continue;
+        const dist = haversine(rA.latitude, rA.longitude, rB.latitude, rB.longitude);
+        if (dist <= MERGE_RADIUS) {
+          cluster.push([idB, rB]);
+          processed.add(idB);
+        }
+      }
+      if (cluster.length < 2) continue;
+
+      const mergedDesc = cluster.map(([, rpt]) => rpt.description || "").filter(d => d).join(",");
+      const timestamps = cluster.map(([, rpt]) => rpt.timestamp || 0);
+      const maxTs = Math.max(...timestamps);
+      const avgLat = cluster.reduce((sum, [, rpt]) => sum + rpt.latitude, 0) / cluster.length;
+      const avgLon = cluster.reduce((sum, [, rpt]) => sum + rpt.longitude, 0) / cluster.length;
+      const newKey = liveRef.push().key;
+
+      updates[`/reports/${newKey}`] = {
+        reportType: rA.reportType,
+        description: mergedDesc,
+        latitude: avgLat,
+        longitude: avgLon,
+        timestamp: maxTs,
+        merged: true,
+      };
+
+      cluster.forEach(([rid, rpt]) => {
+        updates[`/reports_trash/${rid}`] = rpt;
+        updates[`/reports/${rid}`] = null;
+      });
+    }
+
+    await db.ref().update(updates);
+  } catch {}
+  process.exit(0);
 })();
