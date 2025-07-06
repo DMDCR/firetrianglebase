@@ -46,53 +46,53 @@ function haversine(lat1, lon1, lat2, lon2) {
     const updates = {};
 
     Object.entries(liveData).forEach(([id, rpt]) => {
-      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) {
-        updates[`/reports/${id}`] = null;
-        deleteCount++;
-      }
+      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) { updates[`/reports/${id}`] = null; deleteCount++; }
     });
     Object.entries(trashData).forEach(([id, rpt]) => {
-      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) {
-        updates[`/reports_trash/${id}`] = null;
-        deleteCount++;
-      }
+      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) { updates[`/reports_trash/${id}`] = null; deleteCount++; }
     });
     Object.entries(usersData).forEach(([uid, usr]) => {
-      if (usr.lastReportTimestamp && now - usr.lastReportTimestamp > MAX_AGE) {
-        updates[`/users/${uid}/lastReportTimestamp`] = null;
-        deleteCount++;
-      }
+      if (usr.lastReportTimestamp && now - usr.lastReportTimestamp > MAX_AGE) { updates[`/users/${uid}/lastReportTimestamp`] = null; deleteCount++; }
     });
     Object.entries(mergedData).forEach(([id, rpt]) => {
-      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) {
-        updates[`/merged_reports/${id}`] = null;
-        deleteCount++;
-      }
+      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) { updates[`/merged_reports/${id}`] = null; deleteCount++; }
+    });
+
+    Object.entries(liveData).forEach(([rid, rpt]) => {
+      if (!rpt.type || !rpt.latitude || !rpt.longitude) return;
+      Object.entries(mergedData).forEach(([mid, mr]) => {
+        if (mr.type !== rpt.type) return;
+        const dist = haversine(rpt.latitude, rpt.longitude, mr.latitude, mr.longitude);
+        if (dist <= MERGE_RADIUS) {
+          updates[`/reports_trash/${rid}`] = rpt;
+          updates[`/reports/${rid}`] = null;
+          deleteCount++;
+          const oldDesc = mr.description || "";
+          const addDesc = rpt.description || "";
+          const newDesc = oldDesc ? `${oldDesc},${addDesc}` : addDesc;
+          const newTs = Math.max(mr.timestamp || 0, rpt.timestamp || 0);
+          updates[`/merged_reports/${mid}/description`] = newDesc;
+          updates[`/merged_reports/${mid}/timestamp`] = newTs;
+        }
+      });
     });
 
     const processed = new Set();
     const entries = Object.entries(liveData);
-
     for (let i = 0; i < entries.length; i++) {
       const [idA, rA] = entries[i];
       if (processed.has(idA) || !rA.type || !rA.latitude || !rA.longitude) continue;
       if (Object.values(mergedData).some(m => m.timestamp === rA.timestamp && m.latitude === rA.latitude && m.longitude === rA.longitude && m.type === rA.type)) continue;
-
       const cluster = [[idA, rA]];
       processed.add(idA);
-
       for (let j = i + 1; j < entries.length; j++) {
         const [idB, rB] = entries[j];
         if (processed.has(idB) || rB.type !== rA.type) continue;
         if (Object.values(mergedData).some(m => m.timestamp === rB.timestamp && m.latitude === rB.latitude && m.longitude === rB.longitude && m.type === rB.type)) continue;
         const dist = haversine(rA.latitude, rA.longitude, rB.latitude, rB.longitude);
-        if (dist <= MERGE_RADIUS) {
-          cluster.push([idB, rB]);
-          processed.add(idB);
-        }
+        if (dist <= MERGE_RADIUS) { cluster.push([idB, rB]); processed.add(idB); }
       }
       if (cluster.length < 2) continue;
-
       mergeCount++;
       const mergedDesc = cluster.map(([, rpt]) => rpt.description || "").filter(d => d).join(",");
       const timestamps = cluster.map(([, rpt]) => rpt.timestamp || 0);
@@ -103,23 +103,10 @@ function haversine(lat1, lon1, lat2, lon2) {
       const avgLon = cluster.reduce((sum, [, rpt]) => sum + rpt.longitude, 0) / cluster.length;
       const newKey = liveRef.push().key;
 
-      const mergedObj = {
-        type: rA.type,
-        description: mergedDesc,
-        icon,
-        latitude: avgLat,
-        longitude: avgLon,
-        timestamp: maxTs,
-        usersubmitting: 0,
-      };
-
+      const mergedObj = { type: rA.type, description: mergedDesc, icon, latitude: avgLat, longitude: avgLon, timestamp: maxTs, usersubmitting: 0 };
       updates[`/reports/${newKey}`] = mergedObj;
       updates[`/merged_reports/${newKey}`] = mergedObj;
-
-      cluster.forEach(([rid, rpt]) => {
-        updates[`/reports_trash/${rid}`] = rpt;
-        updates[`/reports/${rid}`] = null;
-      });
+      cluster.forEach(([rid, rpt]) => { updates[`/reports_trash/${rid}`] = rpt; updates[`/reports/${rid}`] = null; });
     }
 
     await db.ref().update(updates);
