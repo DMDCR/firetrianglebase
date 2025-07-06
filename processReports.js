@@ -145,6 +145,27 @@ function haversine(lat1, lon1, lat2, lon2) {
       });
     }
 
+    const checkAndPurgeIdentical = () => {
+      const mergedEntries = Object.entries(mergedData);
+      for (let i = 0; i < mergedEntries.length; i++) {
+        const [idA, rA] = mergedEntries[i];
+        for (let j = i + 1; j < mergedEntries.length; j++) {
+          const [idB, rB] = mergedEntries[j];
+          if (rA.latitude === rB.latitude && rA.longitude === rB.longitude) {
+            if (rA.description.length < rB.description.length) {
+              updates[`/merged_reports/${idA}`] = null;
+              deleteCount++;
+            } else {
+              updates[`/merged_reports/${idB}`] = null;
+              deleteCount++;
+            }
+          }
+        }
+      }
+    };
+
+    checkAndPurgeIdentical();
+
     await db.ref().update(updates);
     console.log(`✅ Deleted ${deleteCount} items, merged ${mergeCount} clusters.`);
     console.log("🎉 Cleanup and merge succeeded.");
