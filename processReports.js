@@ -45,10 +45,8 @@ function haversine(lat1, lon1, lat2, lon2) {
     const mergedData = mergedSnap.val() || {};
     const updates = {};
 
-    // We track the merged report timestamps to prevent accidental deletion
     const mergedTimestamps = new Set(Object.values(mergedData).map(m => m.timestamp));
 
-    // Check and delete old live reports
     Object.entries(liveData).forEach(([id, rpt]) => {
       if (rpt.timestamp && now - rpt.timestamp > MAX_AGE && !mergedTimestamps.has(rpt.timestamp)) {
         updates[`/reports/${id}`] = null;
@@ -56,7 +54,6 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     });
 
-    // Check and delete old trash reports
     Object.entries(trashData).forEach(([id, rpt]) => {
       if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) {
         updates[`/reports_trash/${id}`] = null;
@@ -64,7 +61,6 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     });
 
-    // Check and delete old user report timestamps
     Object.entries(usersData).forEach(([uid, usr]) => {
       if (usr.lastReportTimestamp && now - usr.lastReportTimestamp > MAX_AGE) {
         updates[`/users/${uid}/lastReportTimestamp`] = null;
@@ -72,7 +68,6 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     });
 
-    // Check and delete old merged reports that are over 48 hours old
     Object.entries(mergedData).forEach(([id, rpt]) => {
       if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) {
         updates[`/merged_reports/${id}`] = null;
@@ -80,14 +75,23 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     });
 
-    // Copy over merged reports that are missing from live reports
+    const seen = new Set();
+    Object.entries(mergedData).forEach(([id, rpt]) => {
+      const key = `${rpt.latitude},${rpt.longitude}`;
+      if (seen.has(key)) {
+        updates[`/merged_reports/${id}`] = null;
+        deleteCount++;
+      } else {
+        seen.add(key);
+      }
+    });
+
     Object.entries(mergedData).forEach(([id, rpt]) => {
       if (!liveData[id] && rpt.timestamp && now - rpt.timestamp <= MAX_AGE) {
         updates[`/reports/${id}`] = rpt;
       }
     });
 
-    // Merge nearby reports and update the merged reports
     const processed = new Set();
     const entries = Object.entries(liveData);
     for (let i = 0; i < entries.length; i++) {
