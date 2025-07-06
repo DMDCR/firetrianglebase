@@ -91,6 +91,8 @@ function haversine(lat1, lon1, lat2, lon2) {
       const mergedDesc = cluster.map(([, rpt]) => rpt.description || "").filter(d => d).join(",");
       const timestamps = cluster.map(([, rpt]) => rpt.timestamp || 0);
       const maxTs = Math.max(...timestamps);
+      const latestRpt = cluster.find(([, rpt]) => rpt.timestamp === maxTs)[1];
+      const icon = latestRpt.icon || "";
       const avgLat = cluster.reduce((sum, [, rpt]) => sum + rpt.latitude, 0) / cluster.length;
       const avgLon = cluster.reduce((sum, [, rpt]) => sum + rpt.longitude, 0) / cluster.length;
       const newKey = liveRef.push().key;
@@ -98,9 +100,11 @@ function haversine(lat1, lon1, lat2, lon2) {
       const mergedObj = {
         type: rA.type,
         description: mergedDesc,
+        icon,
         latitude: avgLat,
         longitude: avgLon,
         timestamp: maxTs,
+        usersubmitting: 0,
       };
 
       updates[`/reports/${newKey}`] = mergedObj;
