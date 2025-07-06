@@ -63,6 +63,12 @@ function haversine(lat1, lon1, lat2, lon2) {
         deleteCount++;
       }
     });
+    Object.entries(mergedData).forEach(([id, rpt]) => {
+      if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) {
+        updates[`/merged_reports/${id}`] = null;
+        deleteCount++;
+      }
+    });
 
     const processed = new Set();
     const entries = Object.entries(liveData);
