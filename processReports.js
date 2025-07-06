@@ -94,14 +94,14 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     }
 
-    // Create coordinate map of live reports to avoid duplicates
+    // Build a coordinate map of live reports
     const latLonInUse = new Set(
       Object.entries(liveData)
         .filter(([id]) => !updates[`/reports/${id}`]) // Only live reports not being deleted
         .map(([, rpt]) => `${rpt.latitude},${rpt.longitude}`)
     );
 
-    // Now move reports from merged_reports to /reports while checking for duplicates
+    // Process the merged reports for possible movement to live reports
     for (const [id, rpt] of Object.entries(mergedData)) {
       if (!rpt?.latitude || !rpt?.longitude || !rpt?.timestamp) continue;
 
