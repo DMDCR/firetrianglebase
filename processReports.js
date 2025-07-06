@@ -1,9 +1,8 @@
 const admin = require("firebase-admin");
 
-// Load credentials from environment variables
+// Load credentials from env
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
-// Initialize Firebase
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: process.env.FIREBASE_DB_URL,
@@ -15,32 +14,32 @@ const mergedRef = db.ref("merged_reports");
 const trashRef = db.ref("reports_trash");
 const usersRef = db.ref("users");
 
-// Report expires after 48 hours (in seconds)
+// How old (in seconds) until stuff gets removed
 const MAX_AGE = 48 * 60 * 60;
 
-// Distance in km to consider two reports the same
+// Distance in km to treat two reports as “same place”
 const MERGE_RADIUS = 0.1;
 
-// Calculate distance between two GPS coordinates
+// Get distance between 2 points
 function haversine(lat1, lon1, lat2, lon2) {
   const toRad = x => x * Math.PI / 180;
   const R = 6371;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) ** 2 +
-            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-            Math.sin(dLon / 2) ** 2;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) ** 2;
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
 
 (async () => {
-  const now = Math.floor(Date.now() / 1000); // current time in seconds
+  const now = Math.floor(Date.now() / 1000);
   let deleteCount = 0;
   let mergeCount = 0;
 
   try {
-    // Get all relevant data from the database
     const [liveSnap, trashSnap, usersSnap, mergedSnap] = await Promise.all([
       liveRef.once("value"),
       trashRef.once("value"),
@@ -60,7 +59,7 @@ function haversine(lat1, lon1, lat2, lon2) {
         .map(m => m.timestamp)
     );
 
-    // Clean up old reports in /reports (live)
+    // 🗑️ Clean up old /reports
     for (const [id, rpt] of Object.entries(liveData)) {
       if (!rpt?.timestamp || typeof rpt.timestamp !== "number") continue;
       if (now - rpt.timestamp > MAX_AGE && !mergedTimestamps.has(rpt.timestamp)) {
@@ -69,7 +68,7 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     }
 
-    // Clean up old trash
+    // 🗑️ Clean up old /reports_trash
     for (const [id, rpt] of Object.entries(trashData)) {
       if (!rpt?.timestamp || typeof rpt.timestamp !== "number") continue;
       if (now - rpt.timestamp > MAX_AGE) {
@@ -78,7 +77,7 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     }
 
-    // Clear out old timestamps under /users
+    // 🗑️ Clear expired lastReportTimestamps in /users
     for (const [uid, user] of Object.entries(usersData)) {
       if (!user?.lastReportTimestamp || typeof user.lastReportTimestamp !== "number") continue;
       if (now - user.lastReportTimestamp > MAX_AGE) {
@@ -87,7 +86,7 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     }
 
-    // Clean up merged reports that are too old
+    // 🗑️ Remove expired /merged_reports
     for (const [id, rpt] of Object.entries(mergedData)) {
       if (!rpt?.timestamp || typeof rpt.timestamp !== "number") continue;
       if (now - rpt.timestamp > MAX_AGE) {
@@ -96,8 +95,8 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     }
 
-    // Remove duplicates in /merged_reports — keep the one with longer description
-    const seenCoords = new Map(); // key = lat,lng
+    // 🧹 Deduplicate merged_reports based on same lat/lng
+    const seenCoords = new Map(); // "lat,lng" -> {id, descLength}
     for (const [id, rpt] of Object.entries(mergedData)) {
       if (!rpt?.latitude || !rpt?.longitude) continue;
       const key = `${rpt.latitude},${rpt.longitude}`;
@@ -117,12 +116,9 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     }
 
-    // Check if a report exists in both /reports and /merged_reports
-    // Keep the longer description
+    // 🧹 Clean up duplicates between live and merged
     for (const [id, rpt] of Object.entries(liveData)) {
       if (!rpt?.latitude || !rpt?.longitude) continue;
-      const key = `${rpt.latitude},${rpt.longitude}`;
-
       for (const [mergedId, mergedRpt] of Object.entries(mergedData)) {
         if (
           mergedRpt &&
@@ -143,7 +139,7 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     }
 
-    // Restore merged reports back to /reports if they were removed but still valid
+    // 🔁 Put any valid merged reports back into /reports
     for (const [id, rpt] of Object.entries(mergedData)) {
       if (!rpt?.timestamp || typeof rpt.timestamp !== "number") continue;
       if (!liveData[id] && now - rpt.timestamp <= MAX_AGE) {
@@ -151,7 +147,7 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     }
 
-    // Find clusters in /reports that are close together and merge them
+    // 🔄 Merge nearby reports in /reports
     const processed = new Set();
     const entries = Object.entries(liveData);
 
@@ -181,7 +177,7 @@ function haversine(lat1, lon1, lat2, lon2) {
         }
       }
 
-      if (cluster.length < 2) continue; // skip if nothing to merge
+      if (cluster.length < 2) continue;
 
       mergeCount++;
 
@@ -197,23 +193,27 @@ function haversine(lat1, lon1, lat2, lon2) {
         longitude: latestRpt.longitude,
         timestamp: maxTs,
         type: latestRpt.type,
-        usersubmitting: "0", // mark as merged/system-created
+        usersubmitting: "0", // this is a system-merged one
       };
 
-      // 🛡️ prevent publishing duplicates to /reports
-      const isDuplicate = Object.values(liveData).some(existing =>
+      const clusterIds = new Set(cluster.map(([rid]) => rid));
+
+      // ✅ only block duplicates that aren't part of this merge
+      const isDuplicate = Object.entries(liveData).some(([existingId, existing]) =>
         existing &&
+        !clusterIds.has(existingId) &&
         existing.latitude === mergedObj.latitude &&
         existing.longitude === mergedObj.longitude
       );
 
       if (!isDuplicate) {
         updates[`/reports/${newKey}`] = mergedObj;
+      } else {
+        console.log(`⚠️ Skipped merged report at (${mergedObj.latitude}, ${mergedObj.longitude}) due to existing report.`);
       }
 
       updates[`/merged_reports/${newKey}`] = mergedObj;
 
-      // Move all clustered reports to trash and delete them from /reports
       for (const [oldId, oldRpt] of cluster) {
         updates[`/reports_trash/${oldId}`] = oldRpt;
         updates[`/reports/${oldId}`] = null;
