@@ -1,0 +1,28 @@
+name: background-process
+
+on:
+  schedule:
+    - cron: '*/8 * * * *'  # Runs every 8 minutes UTC
+  workflow_dispatch: 
+
+jobs:
+  silent-job:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ⬇️ Checkout code
+        uses: actions/checkout@v3
+
+      - name: 🧰 Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: 🔃 Install dependencies
+        run: npm install firebase-admin
+
+      - name: 🧼 Run cleanup logic
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
+        run: node processReports.js
