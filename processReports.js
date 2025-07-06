@@ -47,6 +47,7 @@ function haversine(lat1, lon1, lat2, lon2) {
 
     const mergedTimestamps = new Set(Object.values(mergedData).map(m => m.timestamp));
 
+    // Check and delete old live reports
     Object.entries(liveData).forEach(([id, rpt]) => {
       if (rpt.timestamp && now - rpt.timestamp > MAX_AGE && !mergedTimestamps.has(rpt.timestamp)) {
         updates[`/reports/${id}`] = null;
@@ -54,6 +55,7 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     });
 
+    // Check and delete old trash reports
     Object.entries(trashData).forEach(([id, rpt]) => {
       if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) {
         updates[`/reports_trash/${id}`] = null;
@@ -61,6 +63,7 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     });
 
+    // Check and delete old user report timestamps
     Object.entries(usersData).forEach(([uid, usr]) => {
       if (usr.lastReportTimestamp && now - usr.lastReportTimestamp > MAX_AGE) {
         updates[`/users/${uid}/lastReportTimestamp`] = null;
@@ -68,6 +71,7 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     });
 
+    // Check and delete old merged reports that are over 48 hours old
     Object.entries(mergedData).forEach(([id, rpt]) => {
       if (rpt.timestamp && now - rpt.timestamp > MAX_AGE) {
         updates[`/merged_reports/${id}`] = null;
@@ -75,6 +79,7 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     });
 
+    // Check for identical reports in merged_reports and delete the shorter description
     const seen = new Set();
     Object.entries(mergedData).forEach(([id, rpt]) => {
       const key = `${rpt.latitude},${rpt.longitude}`;
@@ -86,6 +91,28 @@ function haversine(lat1, lon1, lat2, lon2) {
       }
     });
 
+    // Check for identical reports in reports/ and delete the shorter description
+    Object.entries(liveData).forEach(([id, rpt]) => {
+      const key = `${rpt.latitude},${rpt.longitude}`;
+      Object.entries(mergedData).forEach(([mergedId, mergedRpt]) => {
+        if (key === `${mergedRpt.latitude},${mergedRpt.longitude}`) {
+          const currentDescLength = rpt.description ? rpt.description.length : 0;
+          const mergedDescLength = mergedRpt.description ? mergedRpt.description.length : 0;
+
+          // If the description in liveData is shorter, delete it
+          if (currentDescLength < mergedDescLength) {
+            updates[`/reports/${id}`] = null;
+            deleteCount++;
+          } else if (currentDescLength > mergedDescLength) {
+            // If the description in mergedData is shorter, delete it
+            updates[`/merged_reports/${mergedId}`] = null;
+            deleteCount++;
+          }
+        }
+      });
+    });
+
+    // Copy over merged reports that are missing from live reports
     Object.entries(mergedData).forEach(([id, rpt]) => {
       if (!liveData[id] && rpt.timestamp && now - rpt.timestamp <= MAX_AGE) {
         updates[`/reports/${id}`] = rpt;
@@ -144,27 +171,6 @@ function haversine(lat1, lon1, lat2, lon2) {
         updates[`/reports/${rid}`] = null;
       });
     }
-
-    const checkAndPurgeIdentical = () => {
-      const mergedEntries = Object.entries(mergedData);
-      for (let i = 0; i < mergedEntries.length; i++) {
-        const [idA, rA] = mergedEntries[i];
-        for (let j = i + 1; j < mergedEntries.length; j++) {
-          const [idB, rB] = mergedEntries[j];
-          if (rA.latitude === rB.latitude && rA.longitude === rB.longitude) {
-            if (rA.description.length < rB.description.length) {
-              updates[`/merged_reports/${idA}`] = null;
-              deleteCount++;
-            } else {
-              updates[`/merged_reports/${idB}`] = null;
-              deleteCount++;
-            }
-          }
-        }
-      }
-    };
-
-    checkAndPurgeIdentical();
 
     await db.ref().update(updates);
     console.log(`✅ Deleted ${deleteCount} items, merged ${mergeCount} clusters.`);
