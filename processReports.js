@@ -54,12 +54,12 @@ function haversine(lat1, lon1, lat2, lon2) {
 
     for (let i = 0; i < entries.length; i++) {
       const [idA, rA] = entries[i];
-      if (processed.has(idA) || !rA.reportType || !rA.latitude || !rA.longitude || rA.merged) continue;
+      if (processed.has(idA) || !rA.type || !rA.latitude || !rA.longitude || rA.merged) continue;
       const cluster = [[idA, rA]];
       processed.add(idA);
       for (let j = i + 1; j < entries.length; j++) {
         const [idB, rB] = entries[j];
-        if (processed.has(idB) || rB.reportType !== rA.reportType || rB.merged) continue;
+        if (processed.has(idB) || rB.type !== rA.type || rB.merged) continue;
         const dist = haversine(rA.latitude, rA.longitude, rB.latitude, rB.longitude);
         if (dist <= MERGE_RADIUS) {
           cluster.push([idB, rB]);
@@ -76,7 +76,7 @@ function haversine(lat1, lon1, lat2, lon2) {
       const newKey = liveRef.push().key;
 
       updates[`/reports/${newKey}`] = {
-        reportType: rA.reportType,
+        type: rA.type,
         description: mergedDesc,
         latitude: avgLat,
         longitude: avgLon,
