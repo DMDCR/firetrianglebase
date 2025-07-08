@@ -11,6 +11,8 @@ jobs:
 
     steps:
       - name: Delete old workflow logs
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           logs=$(gh run list --limit 100)
           for run_id in $(echo "$logs" | awk '{print $1}'); do
