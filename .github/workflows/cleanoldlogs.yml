@@ -1,4 +1,4 @@
-name: Cleanup Old Workflow Runs
+name: Cleanup All Workflow Runs
 
 permissions:
   actions: write
@@ -13,16 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          runs=$(gh api repos/${GITHUB_REPOSITORY}/actions/runs --paginate --jq '.workflow_runs[] | [.id, .created_at] | @tsv')
-          deleted=0
-          now=$(date +%s)
-          while IFS=$'\t' read -r id created; do
-            ts=$(date -d "$created" +%s)
-            if (( now - ts > 172800 )); then
-              gh api repos/${GITHUB_REPOSITORY}/actions/runs/$id -X DELETE --silent
-              ((deleted++))
-            fi
-          done <<< "$runs"
-          echo "Deleted $deleted runs"
+          gh api repos/${GITHUB_REPOSITORY}/actions/runs --paginate --jq '.workflow_runs[].id' | \
+          xargs -n1 -I {} gh api repos/${GITHUB_REPOSITORY}/actions/runs/{} -X DELETE --silent
         env:
           GH_TOKEN: ${{ github.token }}
