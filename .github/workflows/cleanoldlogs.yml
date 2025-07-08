@@ -1,5 +1,9 @@
 name: Cleanup Old Workflow Runs
 
+permissions:
+  actions: write
+  contents: read
+
 on:
   workflow_dispatch:
   schedule:
@@ -17,7 +21,9 @@ jobs:
           runs=$(gh api repos/${GITHUB_REPOSITORY}/actions/runs --paginate --jq '.workflow_runs[] | [.id, .created_at] | @tsv')
           while IFS=$'\t' read -r id date; do
             ts=$(date -d "$date" +%s)
-            if (( ( $(date +%s) - ts ) > 172800 )); then
+            age=$(( $(date +%s) - ts ))
+            if (( age > 172800 )); then
+              echo "Deleting run $id from $(date -d "@$ts")"
               gh api repos/${GITHUB_REPOSITORY}/actions/runs/$id -X DELETE
             fi
           done <<< "$runs"
