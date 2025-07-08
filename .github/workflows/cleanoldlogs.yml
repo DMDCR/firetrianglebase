@@ -1,0 +1,33 @@
+name: Cleanup Old Workflow Logs
+
+on:
+  schedule:
+    # This cron expression will run the workflow every 48 hours.
+    - cron: "0 0 */2 * *"  # every 48 hours, you can adjust this
+
+jobs:
+  delete_logs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Delete old workflow logs
+        run: |
+          # Get the list of workflows (run logs) for this repo
+          logs=$(gh run list --limit 100)  # Limit to 100 runs, can be adjusted
+          echo "$logs"
+
+
+          for run_id in $(echo "$logs" | grep 'completed' | awk '{print $1}'); do
+            run_date=$(gh run view $run_id --json createdAt -q ".createdAt")
+            run_timestamp=$(date -d "$run_date" +%s)
+            current_timestamp=$(date +%s)
+            age_in_hours=$((($current_timestamp - $run_timestamp) / 3600))
+
+            if [ $age_in_hours -gt 48 ]; then
+              echo "Deleting workflow log $run_id as it's older than 48 hours."
+              gh run cancel $run_id  # Cancel the workflow run (deletes the logs)
+            fi
+          done
