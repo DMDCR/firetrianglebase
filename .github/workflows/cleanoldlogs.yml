@@ -17,7 +17,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          logs=$(gh run list --limit 100)
+          logs=$(gh run list --status all --limit 100)
           for run_id in $(echo "$logs" | awk '{print $1}'); do
             run_date=$(gh run view $run_id --json createdAt -q ".createdAt")
             run_timestamp=$(date -d "$run_date" +%s)
