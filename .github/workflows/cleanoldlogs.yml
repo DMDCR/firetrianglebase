@@ -1,4 +1,4 @@
-name: cleanup old workflow logs
+name: Cleanup Old Workflow Logs
 
 on:
   workflow_dispatch:
@@ -10,29 +10,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install GitHub CLI
-        run: |
-          curl -fsSL https://cli.github.com/packages/githubcli-archive.key | sudo tee /etc/apt/trusted.gpg.d/githubcli.asc > /dev/null
-          sudo apt-add-repository https://cli.github.com/packages
-          sudo apt-get update
-          sudo apt-get install gh
-
-      - name: Checkout repository
-        uses: actions/checkout@v2
-
       - name: Delete old workflow logs
         run: |
           logs=$(gh run list --limit 100)
-          for run_id in $(echo "$logs" | grep 'completed' | awk '{print $1}'); do
+          for run_id in $(echo "$logs" | awk '{print $1}'); do
             run_date=$(gh run view $run_id --json createdAt -q ".createdAt")
             run_timestamp=$(date -d "$run_date" +%s)
             current_timestamp=$(date +%s)
             age_in_hours=$((($current_timestamp - $run_timestamp) / 3600))
 
             if [ $age_in_hours -gt 48 ]; then
-              echo "Deleting workflow log $run_id (older than 48 hours)."
               gh run cancel $run_id
-            else
-              echo "Skipping workflow log $run_id (not old enough)."
             fi
           done
