@@ -2,7 +2,7 @@ name: background-process
 
 on:
   schedule:
-    - cron: '*/8 * * * *'  # every 8 minutes UTC
+    - cron: '0 * * * *'  
   workflow_dispatch:
 
 jobs:
